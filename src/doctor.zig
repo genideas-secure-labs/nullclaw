@@ -15,6 +15,8 @@ const channel_catalog = @import("channel_catalog.zig");
 const daemon = @import("daemon.zig");
 const cron = @import("cron.zig");
 const builtin = @import("builtin");
+const bootstrap_mod = @import("bootstrap/root.zig");
+const BootstrapProvider = bootstrap_mod.BootstrapProvider;
 
 /// Staleness thresholds (seconds).
 const DAEMON_STALE_SECONDS: i64 = 30;
@@ -317,9 +319,17 @@ pub fn checkWorkspace(
         }
     }
 
-    // Key workspace files
-    checkFileExists(allocator, ws, "SOUL.md", cat, items) catch {};
-    checkFileExists(allocator, ws, "AGENTS.md", cat, items) catch {};
+    // Key workspace files — use bootstrap provider when available.
+    const bp: ?BootstrapProvider = bootstrap_mod.createProvider(
+        allocator,
+        config.memory.backend,
+        null,
+        config.workspace_dir,
+    ) catch null;
+    defer if (bp) |p| p.deinit();
+
+    checkFileExists(allocator, ws, "SOUL.md", cat, items, bp) catch {};
+    checkFileExists(allocator, ws, "AGENTS.md", cat, items, bp) catch {};
 }
 
 fn checkFileExists(
@@ -328,7 +338,31 @@ fn checkFileExists(
     name: []const u8,
     cat: []const u8,
     items: *std.ArrayList(DiagItem),
+    bootstrap_provider: ?BootstrapProvider,
 ) !void {
+    // Use bootstrap provider when available.
+    if (bootstrap_provider) |bp| {
+        if (bp.exists(name)) {
+            if (std.mem.eql(u8, name, "SOUL.md")) {
+                try items.append(allocator, DiagItem.ok(cat, "SOUL.md present"));
+            } else if (std.mem.eql(u8, name, "AGENTS.md")) {
+                try items.append(allocator, DiagItem.ok(cat, "AGENTS.md present"));
+            } else {
+                try items.append(allocator, DiagItem.ok(cat, "file present"));
+            }
+        } else {
+            if (std.mem.eql(u8, name, "SOUL.md")) {
+                try items.append(allocator, DiagItem.warn(cat, "SOUL.md not found (optional)"));
+            } else if (std.mem.eql(u8, name, "AGENTS.md")) {
+                try items.append(allocator, DiagItem.warn(cat, "AGENTS.md not found (optional)"));
+            } else {
+                try items.append(allocator, DiagItem.warn(cat, "file not found (optional)"));
+            }
+        }
+        return;
+    }
+
+    // Fallback: direct filesystem check.
     const dir = std.fs.openDirAbsolute(base_dir, .{}) catch return;
     var d = dir;
     defer d.close();

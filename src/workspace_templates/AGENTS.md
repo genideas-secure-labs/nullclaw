@@ -38,6 +38,16 @@ Capture what matters. Decisions, context, things to remember. Skip secrets unles
 - **Daily notes:** `memory/YYYY-MM-DD.md` — raw logs of what happened
 - **Long-term:** `MEMORY.md` — curated memory for main sessions
 
+### Source of Truth by Backend
+
+Your memory backend determines where data lives. Know your backend:
+
+- **hybrid** (recommended): Bootstrap files (SOUL.md, AGENTS.md, etc.) live on disk in this workspace — read and edit them directly. Runtime memory (conversations, auto-saves) is stored in SQLite. Use `memory_list`, `memory_recall`, `memory_store` tools for runtime entries.
+- **markdown**: Everything is on disk. Bootstrap files and daily notes are plain markdown files you read and write directly.
+- **sqlite**: All memory (including bootstrap files) is in the database. Use `memory_list`, `memory_recall`, `memory_store` tools for everything.
+- **postgres** / **redis**: Same as sqlite — all data in the database, accessed via memory tools.
+- **none** / **memory**: Ephemeral. Nothing persists between sessions.
+
 ### 🧠 MEMORY.md - Your Long-Term Memory
 
 - **ONLY load in main session** (direct chats with your human)

@@ -119,7 +119,7 @@ pub fn runTaskWithTools(
     });
     agent.has_system_prompt = true;
     agent.system_prompt_has_conversation_context = false;
-    agent.workspace_prompt_fingerprint = agent_mod.prompt.workspacePromptFingerprint(allocator, request.workspace_dir) catch null;
+    agent.workspace_prompt_fingerprint = agent_mod.prompt.workspacePromptFingerprint(allocator, request.workspace_dir, agent.bootstrap) catch null;
 
     return agent.turn(request.task);
 }

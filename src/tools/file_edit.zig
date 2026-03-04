@@ -5,6 +5,7 @@ const ToolResult = root.ToolResult;
 const JsonObjectMap = root.JsonObjectMap;
 const isPathSafe = @import("path_security.zig").isPathSafe;
 const isResolvedPathAllowed = @import("path_security.zig").isResolvedPathAllowed;
+const bootstrap_mod = @import("../bootstrap/root.zig");
 
 /// Default maximum file size to read for editing (10MB).
 const DEFAULT_MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
@@ -14,6 +15,8 @@ pub const FileEditTool = struct {
     workspace_dir: []const u8,
     allowed_paths: []const []const u8 = &.{},
     max_file_size: usize = DEFAULT_MAX_FILE_SIZE,
+    bootstrap_provider: ?bootstrap_mod.BootstrapProvider = null,
+    backend_name: []const u8 = "hybrid",
 
     pub const tool_name = "file_edit";
     pub const tool_description = "Find and replace text in a file";
@@ -53,6 +56,33 @@ pub const FileEditTool = struct {
             break :blk try std.fs.path.join(allocator, &.{ self.workspace_dir, path });
         };
         defer allocator.free(full_path);
+
+        // Intercept bootstrap file edits for non-file backends.
+        const basename = std.fs.path.basename(full_path);
+        if (bootstrap_mod.isBootstrapFilename(basename)) {
+            if (self.bootstrap_provider) |bp| {
+                if (!bootstrap_mod.backendUsesFiles(self.backend_name)) {
+                    const existing = try bp.load(allocator, basename) orelse
+                        return ToolResult.fail("File not found in memory backend");
+                    defer allocator.free(existing);
+
+                    if (old_text.len == 0)
+                        return ToolResult.fail("old_text must not be empty");
+
+                    const pos = std.mem.indexOf(u8, existing, old_text) orelse
+                        return ToolResult.fail("old_text not found in file");
+
+                    const before = existing[0..pos];
+                    const after = existing[pos + old_text.len ..];
+                    const new_contents = try std.mem.concat(allocator, u8, &.{ before, new_text, after });
+                    defer allocator.free(new_contents);
+
+                    try bp.store(basename, new_contents);
+                    const msg = try std.fmt.allocPrint(allocator, "Replaced {d} bytes with {d} bytes in {s} (memory backend)", .{ old_text.len, new_text.len, path });
+                    return ToolResult{ .success = true, .output = msg };
+                }
+            }
+        }
 
         // Resolve to catch symlink escapes
         const resolved = std.fs.cwd().realpathAlloc(allocator, full_path) catch |err| {

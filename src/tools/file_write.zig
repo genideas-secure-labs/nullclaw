@@ -6,11 +6,14 @@ const ToolResult = root.ToolResult;
 const JsonObjectMap = root.JsonObjectMap;
 const isPathSafe = @import("path_security.zig").isPathSafe;
 const isResolvedPathAllowed = @import("path_security.zig").isResolvedPathAllowed;
+const bootstrap_mod = @import("../bootstrap/root.zig");
 
 /// Write file contents with workspace path scoping.
 pub const FileWriteTool = struct {
     workspace_dir: []const u8,
     allowed_paths: []const []const u8 = &.{},
+    bootstrap_provider: ?bootstrap_mod.BootstrapProvider = null,
+    backend_name: []const u8 = "hybrid",
 
     pub const tool_name = "file_write";
     pub const tool_description = "Write contents to a file in the workspace";
@@ -47,6 +50,18 @@ pub const FileWriteTool = struct {
             break :blk try std.fs.path.join(allocator, &.{ self.workspace_dir, path });
         };
         defer allocator.free(full_path);
+
+        // Intercept bootstrap file writes for non-file backends.
+        const bp_basename = std.fs.path.basename(full_path);
+        if (bootstrap_mod.isBootstrapFilename(bp_basename)) {
+            if (self.bootstrap_provider) |bp| {
+                if (!bootstrap_mod.backendUsesFiles(self.backend_name)) {
+                    try bp.store(bp_basename, content);
+                    const msg = try std.fmt.allocPrint(allocator, "Wrote {s} ({d} bytes) to memory backend", .{ bp_basename, content.len });
+                    return ToolResult{ .success = true, .output = msg };
+                }
+            }
+        }
 
         const ws_resolved: ?[]const u8 = std.fs.cwd().realpathAlloc(allocator, self.workspace_dir) catch null;
         defer if (ws_resolved) |wr| allocator.free(wr);

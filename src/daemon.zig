@@ -768,7 +768,7 @@ fn inboundDispatcherThread(
 pub fn run(allocator: std.mem.Allocator, config: *const Config, host: []const u8, port: u16) !void {
     // Ensure lifecycle parity: workspace bootstrap files must exist
     // even when users skip onboard and start runtime directly.
-    try onboard.scaffoldWorkspace(allocator, config.workspace_dir, &onboard.ProjectContext{});
+    try onboard.scaffoldWorkspace(allocator, config.workspace_dir, &onboard.ProjectContext{}, null);
 
     health.markComponentOk("daemon");
     shutdown_requested.store(false, .release);
