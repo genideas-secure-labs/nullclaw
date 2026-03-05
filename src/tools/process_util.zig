@@ -80,16 +80,24 @@ pub fn run(
         if (cancel_watcher) |t| t.join();
     }
 
-    const stdout = if (child.stdout) |stdout_file|
-        try stdout_file.readToEndAlloc(allocator, opts.max_output_bytes)
-    else
-        try allocator.dupe(u8, "");
+    const stdout = if (child.stdout) |stdout_file| blk: {
+        break :blk stdout_file.readToEndAlloc(allocator, opts.max_output_bytes) catch |err| {
+            if (effective_cancel_flag != null and effective_cancel_flag.?.load(.acquire)) {
+                break :blk try allocator.dupe(u8, "");
+            }
+            return err;
+        };
+    } else try allocator.dupe(u8, "");
     errdefer allocator.free(stdout);
 
-    const stderr = if (child.stderr) |stderr_file|
-        try stderr_file.readToEndAlloc(allocator, opts.max_output_bytes)
-    else
-        try allocator.dupe(u8, "");
+    const stderr = if (child.stderr) |stderr_file| blk: {
+        break :blk stderr_file.readToEndAlloc(allocator, opts.max_output_bytes) catch |err| {
+            if (effective_cancel_flag != null and effective_cancel_flag.?.load(.acquire)) {
+                break :blk try allocator.dupe(u8, "");
+            }
+            return err;
+        };
+    } else try allocator.dupe(u8, "");
     errdefer allocator.free(stderr);
 
     const term = try child.wait();
