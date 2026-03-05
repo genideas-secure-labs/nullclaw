@@ -470,6 +470,9 @@ test "shell wildcard policy permits command outside default allowlist" {
 }
 
 test "shell accepts markdown-fenced command payload" {
+    const builtin = @import("builtin");
+    if (comptime builtin.os.tag == .windows) return error.SkipZigTest;
+
     const policy_mod = @import("../security/policy.zig");
     var tracker = policy_mod.RateTracker.init(std.testing.allocator, 1000);
     defer tracker.deinit();
@@ -492,7 +495,7 @@ test "shell accepts markdown-fenced command payload" {
     try std.testing.expect(std.mem.indexOf(u8, result.output, "fenced") != null);
 }
 
-test "shell keeps subshell backticks blocked after markdown normalization" {
+test "shell keeps subshell backticks blocked after fenced markdown normalization" {
     const policy_mod = @import("../security/policy.zig");
     var tracker = policy_mod.RateTracker.init(std.testing.allocator, 1000);
     defer tracker.deinit();
@@ -506,7 +509,7 @@ test "shell keeps subshell backticks blocked after markdown normalization" {
     };
 
     var st = ShellTool{ .workspace_dir = "/tmp", .policy = &policy };
-    const parsed = try root.parseTestArgs("{\"command\": \"echo `whoami`\"}");
+    const parsed = try root.parseTestArgs("{\"command\": \"```bash\\necho `whoami`\\n```\"}");
     defer parsed.deinit();
     const result = try st.execute(std.testing.allocator, parsed.value.object);
     defer if (result.output.len > 0) std.testing.allocator.free(result.output);
