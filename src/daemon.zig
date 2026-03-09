@@ -843,7 +843,7 @@ pub fn run(allocator: std.mem.Allocator, config: *const Config, host: []const u8
 
     // Spawn gateway thread
     state.markRunning("gateway");
-    const gw_thread = std.Thread.spawn(.{ .stack_size = thread_stacks.CONTROL_LOOP_STACK_SIZE }, gatewayThread, .{ allocator, config, host, port, &state, &event_bus }) catch |err| {
+    const gw_thread = std.Thread.spawn(.{ .stack_size = thread_stacks.DAEMON_SERVICE_STACK_SIZE }, gatewayThread, .{ allocator, config, host, port, &state, &event_bus }) catch |err| {
         state.markError("gateway", @errorName(err));
         try stdout.print("Failed to spawn gateway: {}\n", .{err});
         return err;
@@ -865,7 +865,7 @@ pub fn run(allocator: std.mem.Allocator, config: *const Config, host: []const u8
     var sched_thread: ?std.Thread = null;
     if (config.scheduler.enabled) {
         state.markRunning("scheduler");
-        if (std.Thread.spawn(.{ .stack_size = thread_stacks.CONTROL_LOOP_STACK_SIZE }, schedulerThread, .{ allocator, config, &state, &event_bus })) |thread| {
+        if (std.Thread.spawn(.{ .stack_size = thread_stacks.DAEMON_SERVICE_STACK_SIZE }, schedulerThread, .{ allocator, config, &state, &event_bus })) |thread| {
             sched_thread = thread;
         } else |err| {
             state.markError("scheduler", @errorName(err));
@@ -895,7 +895,7 @@ pub fn run(allocator: std.mem.Allocator, config: *const Config, host: []const u8
     // Spawn channel supervisor thread (only if channels are configured)
     var chan_thread: ?std.Thread = null;
     if (has_supervised_channels) {
-        if (std.Thread.spawn(.{ .stack_size = thread_stacks.CONTROL_LOOP_STACK_SIZE }, channelSupervisorThread, .{
+        if (std.Thread.spawn(.{ .stack_size = thread_stacks.DAEMON_SERVICE_STACK_SIZE }, channelSupervisorThread, .{
             allocator, config, &state, &channel_registry, channel_rt, &event_bus,
         })) |thread| {
             chan_thread = thread;
@@ -1890,7 +1890,7 @@ test "channelSupervisorThread respects shutdown" {
     defer channel_registry.deinit();
     var event_bus = bus_mod.Bus.init();
 
-    const thread = try std.Thread.spawn(.{ .stack_size = thread_stacks.CONTROL_LOOP_STACK_SIZE }, channelSupervisorThread, .{
+    const thread = try std.Thread.spawn(.{ .stack_size = thread_stacks.DAEMON_SERVICE_STACK_SIZE }, channelSupervisorThread, .{
         std.testing.allocator, &config, &state, &channel_registry, null, &event_bus,
     });
     thread.join();
