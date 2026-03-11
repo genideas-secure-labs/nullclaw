@@ -204,25 +204,25 @@ pub const ShellTool = struct {
             }
         }
 
-        // Execute via platform shell
+        // Execute via platform shell. On Windows, bypass cmd.exe when the user
+        // explicitly invokes PowerShell so pipes stay inside PowerShell instead
+        // of being interpreted by cmd.exe first.
         const proc = @import("process_util.zig");
-        
-        // On Windows, if the command starts with "powershell" or "pwsh", execute it directly via PowerShell
-        // instead of through cmd.exe to avoid pipe interpretation issues
-        const result = if (builtin.os.tag == .windows and isPowerShellCommand(command)) blk: {
-            const ps_info = extractPowerShellCommand(command);
-            var trimmed_ps_cmd = std.mem.trim(u8, ps_info.command, " \t");
-            
-            // Remove outer quotes if present (e.g., "Get-Process | ..." -> Get-Process | ...)
-            if (trimmed_ps_cmd.len >= 2) {
-                const first = trimmed_ps_cmd[0];
-                const last = trimmed_ps_cmd[trimmed_ps_cmd.len - 1];
-                if ((first == '"' and last == '"') or (first == '\'' and last == '\'')) {
-                    trimmed_ps_cmd = trimmed_ps_cmd[1 .. trimmed_ps_cmd.len - 1];
-                }
+        const result = if (builtin.os.tag == .windows) blk: {
+            const parsed_argv = try parseWindowsCommandArgv(allocator, command);
+            defer freeOwnedArgv(allocator, parsed_argv);
+
+            if (parsed_argv.len > 0 and isPowerShellExecutable(parsed_argv[0])) {
+                break :blk try proc.run(allocator, parsed_argv, .{
+                    .cwd = effective_cwd,
+                    .env_map = &env,
+                    .max_output_bytes = self.max_output_bytes,
+                });
             }
-            
-            const full_argv = &.{ ps_info.executable, "-Command", trimmed_ps_cmd };
+
+            const shell_cmd = platform.getShell();
+            const shell_flag = platform.getShellFlag();
+            const full_argv = &.{ shell_cmd, shell_flag, command };
             break :blk try proc.run(allocator, full_argv, .{
                 .cwd = effective_cwd,
                 .env_map = &env,
@@ -268,35 +268,42 @@ pub fn parseBoolField(json: []const u8, key: []const u8) ?bool {
     return json_miniparse.parseBoolField(json, key);
 }
 
-/// Check if a command is a PowerShell command (supports both "powershell" and "pwsh").
-fn isPowerShellCommand(command: []const u8) bool {
-    const trimmed = std.mem.trim(u8, command, " \t");
-    return std.ascii.startsWithIgnoreCase(trimmed, "powershell") or 
-           std.ascii.startsWithIgnoreCase(trimmed, "pwsh");
+fn parseWindowsCommandArgv(allocator: std.mem.Allocator, command: []const u8) ![]const []const u8 {
+    const command_line_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, command);
+    defer allocator.free(command_line_w);
+
+    var iter = try std.process.ArgIteratorWindows.init(allocator, command_line_w);
+    defer iter.deinit();
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (argv.items) |arg| allocator.free(arg);
+        argv.deinit(allocator);
+    }
+
+    while (iter.next()) |arg| {
+        try argv.append(allocator, try allocator.dupe(u8, arg));
+    }
+
+    return try argv.toOwnedSlice(allocator);
 }
 
-/// Extract PowerShell command info (executable and command string).
-/// Returns a struct with the executable name ("powershell" or "pwsh") and the command part.
-fn extractPowerShellCommand(command: []const u8) struct { executable: []const u8, command: []const u8 } {
-    const trimmed = std.mem.trim(u8, command, " \t");
-    
-    if (std.ascii.startsWithIgnoreCase(trimmed, "powershell")) {
-        return .{ 
-            .executable = "powershell", 
-            .command = trimmed["powershell".len..] 
-        };
-    } else if (std.ascii.startsWithIgnoreCase(trimmed, "pwsh")) {
-        return .{ 
-            .executable = "pwsh", 
-            .command = trimmed["pwsh".len..] 
-        };
-    }
-    
-    // Fallback (should not happen if isPowerShellCommand is used)
-    return .{ 
-        .executable = "powershell", 
-        .command = trimmed 
-    };
+fn freeOwnedArgv(allocator: std.mem.Allocator, argv: []const []const u8) void {
+    for (argv) |arg| allocator.free(arg);
+    allocator.free(argv);
+}
+
+fn windowsBasename(path: []const u8) []const u8 {
+    const sep_idx = std.mem.lastIndexOfAny(u8, path, "\\/") orelse return path;
+    return path[sep_idx + 1 ..];
+}
+
+fn isPowerShellExecutable(executable: []const u8) bool {
+    const base = windowsBasename(executable);
+    return std.ascii.eqlIgnoreCase(base, "powershell") or
+        std.ascii.eqlIgnoreCase(base, "powershell.exe") or
+        std.ascii.eqlIgnoreCase(base, "pwsh") or
+        std.ascii.eqlIgnoreCase(base, "pwsh.exe");
 }
 
 /// Extract an integer field value from a JSON blob.
@@ -305,6 +312,33 @@ pub fn parseIntField(json: []const u8, key: []const u8) ?i64 {
 }
 
 // ── Tests ───────────────────────────────────────────────────────────
+
+test "parseWindowsCommandArgv preserves PowerShell flags and quoted script" {
+    const argv = try parseWindowsCommandArgv(
+        std.testing.allocator,
+        "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"Get-Process | Select-Object -First 1\"",
+    );
+    defer freeOwnedArgv(std.testing.allocator, argv);
+
+    try std.testing.expectEqual(@as(usize, 4), argv.len);
+    try std.testing.expectEqualStrings("C:\\Program Files\\PowerShell\\7\\pwsh.exe", argv[0]);
+    try std.testing.expectEqualStrings("-NoProfile", argv[1]);
+    try std.testing.expectEqualStrings("-Command", argv[2]);
+    try std.testing.expectEqualStrings("Get-Process | Select-Object -First 1", argv[3]);
+}
+
+test "isPowerShellExecutable requires exact basename match" {
+    try std.testing.expect(isPowerShellExecutable("powershell"));
+    try std.testing.expect(isPowerShellExecutable("powershell.exe"));
+    try std.testing.expect(isPowerShellExecutable("pwsh"));
+    try std.testing.expect(isPowerShellExecutable("pwsh.exe"));
+    try std.testing.expect(isPowerShellExecutable("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"));
+    try std.testing.expect(isPowerShellExecutable("C:/Program Files/PowerShell/7/pwsh.exe"));
+
+    try std.testing.expect(!isPowerShellExecutable("powershell-preview"));
+    try std.testing.expect(!isPowerShellExecutable("powershell_ise.exe"));
+    try std.testing.expect(!isPowerShellExecutable("pwsh-script"));
+}
 
 test "shell tool name" {
     var st = ShellTool{ .workspace_dir = "/tmp" };
