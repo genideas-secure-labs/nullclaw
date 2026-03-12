@@ -214,6 +214,21 @@ Example:
 
 In that setup, topic `42` routes to `coder`, while the rest of the forum falls back to `orchestrator`.
 
+About `account_id`:
+
+- `account_id` identifies the configured Telegram account entry, not a topic and not an agent.
+- In the standard `channels.telegram.accounts` layout, the object key becomes the account id. For example, `accounts.main` means `account_id = "main"`.
+- In `bindings`, `match.account_id` restricts a binding to one specific Telegram account.
+- If `match.account_id` is omitted, the binding can match any Telegram account for that channel.
+- Different account ids are only useful when the same nullclaw instance runs multiple Telegram bot accounts/tokens.
+
+Effect on delivery:
+
+- Incoming Telegram updates are handled by the account that received them.
+- Routing uses that same `account_id`, so `match.account_id = "main"` matches only messages received through `channels.telegram.accounts.main`.
+- Replies go back out through the same Telegram account/runtime that handled the message.
+- If one binding uses `account_id = "main"` and another uses `account_id = "sub"`, they apply to different configured Telegram accounts; this does not split a single Telegram account's traffic by itself.
+
 Rules:
 
 - `allow_from: []` means deny all inbound messages.
