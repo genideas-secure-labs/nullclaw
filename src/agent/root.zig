@@ -7386,6 +7386,13 @@ test "Agent selectDisplayText hides malformed tool markup payload" {
     try std.testing.expectEqualStrings("", selected);
 }
 
+test "Agent selectDisplayText hides orphan closing tool_call tag" {
+    // Model emits </tool_call> without an opener — must not leak to user.
+    const raw = "Here are the results:\n</tool_call>\nSome reply";
+    const selected = Agent.selectDisplayText(raw, "", 0);
+    try std.testing.expectEqualStrings("", selected);
+}
+
 test "Agent selectDisplayText keeps plain text when no markup exists" {
     const raw = "All good.";
     const selected = Agent.selectDisplayText(raw, "", 0);
