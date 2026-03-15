@@ -223,9 +223,14 @@ pub const McpServer = struct {
             ++ "\n", .{method});
         defer self.allocator.free(msg);
         if (McpServerConfig.isHttpTransport(self.config.transport)) {
-            const resp = self.sendHttpRequest(self.allocator, msg) catch return;
-            self.allocator.free(resp.headers);
-            self.allocator.free(resp.body);
+            const resp = try self.sendHttpRequest(self.allocator, msg);
+            defer {
+                self.allocator.free(resp.headers);
+                self.allocator.free(resp.body);
+            }
+            if (resp.status_code < 200 or resp.status_code >= 300) {
+                return error.HttpBadStatus;
+            }
             return;
         }
 
@@ -574,17 +579,22 @@ test "McpServer init fields" {
     try std.testing.expectEqualStrings("/usr/bin/echo", server.config.command);
 }
 
-test "McpServer sendRequest chooses http path for http transport" {
+test "McpServer sendRequest requires http client for http transport" {
     var server = McpServer.init(std.testing.allocator, .{
         .name = "remote",
         .transport = "http",
         .url = "https://mcp.example.com/rpc",
     });
-    server.http_client = std.http.Client{ .allocator = std.testing.allocator };
-    defer if (server.http_client) |*client| client.deinit();
-    // We don't run real network calls in tests; this only verifies the
-    // transport path is selected and returns an error on failure.
-    _ = server.sendRequest(std.testing.allocator, "tools/list", "{}") catch {};
+    try std.testing.expectError(error.NoHttpClient, server.sendRequest(std.testing.allocator, "tools/list", "{}"));
+}
+
+test "McpServer sendNotification propagates http transport setup errors" {
+    var server = McpServer.init(std.testing.allocator, .{
+        .name = "remote",
+        .transport = "http",
+        .url = "https://mcp.example.com/rpc",
+    });
+    try std.testing.expectError(error.NoHttpClient, server.sendNotification("notifications/initialized", null));
 }
 
 test "McpServer init http fields" {
