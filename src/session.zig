@@ -1459,9 +1459,9 @@ test "getOrCreate uses named agent workspace namespace when workspace_path is se
 
     const base = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(base);
-    const config_path = try std.fmt.allocPrint(testing.allocator, "{s}/config.json", .{base});
+    const config_path = try std.fs.path.join(testing.allocator, &.{ base, "config.json" });
     defer testing.allocator.free(config_path);
-    const expected_workspace = try std.fmt.allocPrint(testing.allocator, "{s}/agents/coder-agent", .{base});
+    const expected_workspace = try std.fs.path.join(testing.allocator, &.{ base, "agents", "coder-agent" });
     defer testing.allocator.free(expected_workspace);
 
     var mock = MockProvider{ .response = "ok" };

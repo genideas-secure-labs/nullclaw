@@ -1155,8 +1155,10 @@ pub const Config = struct {
         if (std.fs.path.isAbsolute(workspace_path)) {
             return try allocator.dupe(u8, workspace_path);
         }
+        const normalized_workspace_path = try normalizeHostPathSeparators(allocator, workspace_path);
+        defer allocator.free(normalized_workspace_path);
         const home_dir = std.fs.path.dirname(self.config_path) orelse self.workspace_dir;
-        return try std.fs.path.join(allocator, &.{ home_dir, workspace_path });
+        return try std.fs.path.join(allocator, &.{ home_dir, normalized_workspace_path });
     }
 
     pub fn resolveAgentWorkspace(self: *const Config, allocator: std.mem.Allocator, agent_name: []const u8) ![]const u8 {
@@ -1220,6 +1222,14 @@ fn normalizePathSeparators(allocator: std.mem.Allocator, path: []const u8) ![]co
     const dup = try allocator.dupe(u8, path);
     for (dup) |*c| {
         if (c.* == '\\') c.* = '/';
+    }
+    return dup;
+}
+
+pub fn normalizeHostPathSeparators(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const dup = try allocator.dupe(u8, path);
+    for (dup) |*c| {
+        if (c.* == '/' or c.* == '\\') c.* = std.fs.path.sep;
     }
     return dup;
 }

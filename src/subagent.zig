@@ -340,8 +340,10 @@ fn resolveWorkspacePath(
     if (std.fs.path.isAbsolute(workspace_path)) {
         return allocator.dupe(u8, workspace_path) catch null;
     }
+    const normalized_workspace_path = config_mod.normalizeHostPathSeparators(allocator, workspace_path) catch return null;
+    defer allocator.free(normalized_workspace_path);
     const home_dir = std.fs.path.dirname(config_path) orelse fallback_workspace;
-    return std.fs.path.join(allocator, &.{ home_dir, workspace_path }) catch null;
+    return std.fs.path.join(allocator, &.{ home_dir, normalized_workspace_path }) catch null;
 }
 
 // ── Thread function ─────────────────────────────────────────────
