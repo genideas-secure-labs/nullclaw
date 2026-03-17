@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = std.log.scoped(.gemini);
 const fs_compat = @import("../fs_compat.zig");
 const platform = @import("../platform.zig");
 const root = @import("root.zig");
@@ -1039,14 +1040,31 @@ pub const GeminiProvider = struct {
         const body = try buildChatRequestBody(allocator, request, model, temperature);
         defer allocator.free(body);
 
-        if (auth.isApiKey()) {
-            return curlStreamGemini(allocator, url, body, &.{}, request.timeout_secs, callback, callback_ctx);
-        } else {
+        const stream_result = if (auth.isApiKey())
+            curlStreamGemini(allocator, url, body, &.{}, request.timeout_secs, callback, callback_ctx)
+        else blk: {
             var auth_hdr_buf: [512]u8 = undefined;
             const auth_hdr = std.fmt.bufPrint(&auth_hdr_buf, "Authorization: Bearer {s}", .{auth.credential()}) catch return error.GeminiApiError;
             const headers = [_][]const u8{auth_hdr};
-            return curlStreamGemini(allocator, url, body, &headers, request.timeout_secs, callback, callback_ctx);
-        }
+            break :blk curlStreamGemini(allocator, url, body, &headers, request.timeout_secs, callback, callback_ctx);
+        };
+
+        return stream_result catch |err| {
+            if (err == error.CurlWaitError or err == error.CurlFailed) {
+                log.warn("Gemini streaming failed with {}; falling back to non-streaming response", .{err});
+                const fallback = try chatImpl(ptr, allocator, request, model, temperature);
+                if (fallback.content) |text| {
+                    callback(callback_ctx, root.StreamChunk.textDelta(text));
+                }
+                callback(callback_ctx, root.StreamChunk.finalChunk());
+                return .{
+                    .content = fallback.content,
+                    .usage = fallback.usage,
+                    .model = fallback.model,
+                };
+            }
+            return err;
+        };
     }
 };
 
