@@ -753,6 +753,50 @@ pub const NostrConfig = struct {
     config_dir: []const u8 = ".",
 };
 
+pub const ExternalChannelConfig = struct {
+    pub const EnvEntry = struct {
+        key: []const u8,
+        value: []const u8,
+    };
+
+    pub const TransportConfig = struct {
+        command: []const u8 = "",
+        args: []const []const u8 = &.{},
+        env: []const EnvEntry = &.{},
+        timeout_ms: u32 = 10_000,
+    };
+
+    account_id: []const u8 = "default",
+    /// Runtime channel identifier exposed inside nullclaw routing and bindings.
+    /// Example: "whatsapp_web"
+    runtime_name: []const u8 = "",
+    /// Plugin process transport configuration (JSON-RPC over stdio).
+    transport: TransportConfig = .{},
+    /// Raw JSON object forwarded as params.config during the start request.
+    plugin_config_json: []const u8 = "{}",
+    /// Runtime-only host-owned state directory for plugin persistence.
+    /// Backfilled by Config.load(); never serialized.
+    state_dir: []const u8 = ".",
+
+    pub fn isValidRuntimeName(raw: []const u8) bool {
+        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+        if (trimmed.len == 0 or trimmed.len > 128) return false;
+        for (trimmed) |ch| {
+            if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == '.') continue;
+            return false;
+        }
+        return true;
+    }
+
+    pub fn hasCommand(raw: []const u8) bool {
+        return std.mem.trim(u8, raw, " \t\r\n").len > 0;
+    }
+
+    pub fn isValidTimeoutMs(timeout_ms: u32) bool {
+        return timeout_ms >= 1 and timeout_ms <= 600_000;
+    }
+};
+
 pub const ChannelsConfig = struct {
     cli: bool = true,
     telegram: []const TelegramConfig = &.{},
@@ -775,6 +819,7 @@ pub const ChannelsConfig = struct {
     maixcam: []const MaixCamConfig = &.{},
     web: []const WebConfig = &.{},
     max: []const MaxConfig = &.{},
+    external: []const ExternalChannelConfig = &.{},
     nostr: ?*NostrConfig = null,
 
     fn primaryAccount(comptime T: type, items: []const T) ?T {
@@ -848,6 +893,9 @@ pub const ChannelsConfig = struct {
     }
     pub fn maxPrimary(self: *const ChannelsConfig) ?MaxConfig {
         return primaryAccount(MaxConfig, self.max);
+    }
+    pub fn externalPrimary(self: *const ChannelsConfig) ?ExternalChannelConfig {
+        return primaryAccount(ExternalChannelConfig, self.external);
     }
 };
 

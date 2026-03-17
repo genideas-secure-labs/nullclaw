@@ -72,6 +72,7 @@ pub const InboundMetadata = struct {
     team_id: ?[]const u8 = null,
     channel_id: ?[]const u8 = null,
     thread_id: ?[]const u8 = null,
+    typing_recipient: ?[]const u8 = null,
     is_dm: ?bool = null,
     is_group: ?bool = null,
     sender_username: ?[]const u8 = null,

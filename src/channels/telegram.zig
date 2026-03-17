@@ -3037,6 +3037,11 @@ pub const TelegramChannel = struct {
         try self.stopTyping(recipient);
     }
 
+    fn vtableSupportsStreamingOutbound(ptr: *anyopaque) bool {
+        const self: *TelegramChannel = @ptrCast(@alignCast(ptr));
+        return self.streaming_enabled;
+    }
+
     pub const vtable = root.Channel.VTable{
         .start = &vtableStart,
         .stop = &vtableStop,
@@ -3047,6 +3052,7 @@ pub const TelegramChannel = struct {
         .healthCheck = &vtableHealthCheck,
         .startTyping = &vtableStartTyping,
         .stopTyping = &vtableStopTyping,
+        .supportsStreamingOutbound = &vtableSupportsStreamingOutbound,
     };
 
     pub fn channel(self: *TelegramChannel) root.Channel {

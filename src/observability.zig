@@ -274,6 +274,8 @@ pub const FileObserver = struct {
         file_observer_mutex.lock();
         defer file_observer_mutex.unlock();
 
+        self.ensureParentDirExists();
+
         const file = std.fs.cwd().openFile(self.path, .{ .mode = .write_only }) catch {
             // Try creating the file if it doesn't exist
             const new_file = std.fs.cwd().createFile(self.path, .{ .truncate = false }) catch return;
@@ -289,30 +291,40 @@ pub const FileObserver = struct {
         file.writeAll("\n") catch {};
     }
 
+    fn ensureParentDirExists(self: *FileObserver) void {
+        const parent = std.fs.path.dirname(self.path) orelse return;
+        if (parent.len == 0) return;
+
+        std.fs.makeDirAbsolute(parent) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => std.fs.cwd().makePath(parent) catch {},
+        };
+    }
+
     fn fileRecordEvent(ptr: *anyopaque, event: *const ObserverEvent) void {
         const self = resolve(ptr);
         var buf: [2048]u8 = undefined;
         const line = switch (event.*) {
-            .agent_start => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"agent_start\",\"provider\":\"{s}\",\"model\":\"{s}\"}}", .{ e.provider, e.model }) catch return,
-            .llm_request => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"llm_request\",\"provider\":\"{s}\",\"model\":\"{s}\",\"messages_count\":{d}}}", .{ e.provider, e.model, e.messages_count }) catch return,
-            .llm_response => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"llm_response\",\"provider\":\"{s}\",\"model\":\"{s}\",\"duration_ms\":{d},\"success\":{}}}", .{ e.provider, e.model, e.duration_ms, e.success }) catch return,
+            .agent_start => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"agent_start\",\"provider\":{f},\"model\":{f}}}", .{ std.json.fmt(e.provider, .{}), std.json.fmt(e.model, .{}) }) catch return,
+            .llm_request => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"llm_request\",\"provider\":{f},\"model\":{f},\"messages_count\":{d}}}", .{ std.json.fmt(e.provider, .{}), std.json.fmt(e.model, .{}), e.messages_count }) catch return,
+            .llm_response => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"llm_response\",\"provider\":{f},\"model\":{f},\"duration_ms\":{d},\"success\":{}}}", .{ std.json.fmt(e.provider, .{}), std.json.fmt(e.model, .{}), e.duration_ms, e.success }) catch return,
             .agent_end => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"agent_end\",\"duration_ms\":{d}}}", .{e.duration_ms}) catch return,
-            .tool_call_start => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"tool_call_start\",\"tool\":\"{s}\"}}", .{e.tool}) catch return,
+            .tool_call_start => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"tool_call_start\",\"tool\":{f}}}", .{std.json.fmt(e.tool, .{})}) catch return,
             .tool_call => |e| blk: {
                 if (detailForObserver(e.detail)) |detail| {
                     break :blk std.fmt.bufPrint(
                         &buf,
-                        "{{\"event\":\"tool_call\",\"tool\":\"{s}\",\"duration_ms\":{d},\"success\":{},\"detail\":{f}}}",
-                        .{ e.tool, e.duration_ms, e.success, std.json.fmt(detail, .{}) },
+                        "{{\"event\":\"tool_call\",\"tool\":{f},\"duration_ms\":{d},\"success\":{},\"detail\":{f}}}",
+                        .{ std.json.fmt(e.tool, .{}), e.duration_ms, e.success, std.json.fmt(detail, .{}) },
                     ) catch return;
                 }
-                break :blk std.fmt.bufPrint(&buf, "{{\"event\":\"tool_call\",\"tool\":\"{s}\",\"duration_ms\":{d},\"success\":{}}}", .{ e.tool, e.duration_ms, e.success }) catch return;
+                break :blk std.fmt.bufPrint(&buf, "{{\"event\":\"tool_call\",\"tool\":{f},\"duration_ms\":{d},\"success\":{}}}", .{ std.json.fmt(e.tool, .{}), e.duration_ms, e.success }) catch return;
             },
             .tool_iterations_exhausted => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"tool_iterations_exhausted\",\"iterations\":{d}}}", .{e.iterations}) catch return,
             .turn_complete => std.fmt.bufPrint(&buf, "{{\"event\":\"turn_complete\"}}", .{}) catch return,
-            .channel_message => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"channel_message\",\"channel\":\"{s}\",\"direction\":\"{s}\"}}", .{ e.channel, e.direction }) catch return,
+            .channel_message => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"channel_message\",\"channel\":{f},\"direction\":{f}}}", .{ std.json.fmt(e.channel, .{}), std.json.fmt(e.direction, .{}) }) catch return,
             .heartbeat_tick => std.fmt.bufPrint(&buf, "{{\"event\":\"heartbeat_tick\"}}", .{}) catch return,
-            .err => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"error\",\"component\":\"{s}\",\"message\":\"{s}\"}}", .{ e.component, e.message }) catch return,
+            .err => |e| std.fmt.bufPrint(&buf, "{{\"event\":\"error\",\"component\":{f},\"message\":{f}}}", .{ std.json.fmt(e.component, .{}), std.json.fmt(e.message, .{}) }) catch return,
         };
         self.appendToFile(line);
     }
@@ -1140,6 +1152,62 @@ test "FileObserver serializes concurrent appends" {
         if (byte == '\n') line_count += 1;
     }
     try std.testing.expectEqual(@as(usize, 64), line_count);
+}
+
+test "FileObserver creates parent directories on first write" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const base = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/nested/diagnostics/obs.jsonl", .{base});
+    defer allocator.free(path);
+
+    var file_obs = FileObserver{ .path = path };
+    const obs = file_obs.observer();
+    const event = ObserverEvent{ .heartbeat_tick = {} };
+    obs.recordEvent(&event);
+
+    const file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    const content = try file.readToEndAlloc(allocator, 4096);
+    defer allocator.free(content);
+
+    try std.testing.expect(std.mem.indexOf(u8, content, "\"event\":\"heartbeat_tick\"") != null);
+}
+
+test "FileObserver emits valid escaped JSONL" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const base = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(base);
+    const path = try std.fmt.allocPrint(allocator, "{s}/obs_escaped.jsonl", .{base});
+    defer allocator.free(path);
+
+    var file_obs = FileObserver{ .path = path };
+    const obs = file_obs.observer();
+    const event = ObserverEvent{ .err = .{
+        .component = "provider\"alpha",
+        .message = "line1\nline2\\tail",
+    } };
+    obs.recordEvent(&event);
+
+    const file = try std.fs.openFileAbsolute(path, .{});
+    defer file.close();
+    const content = try file.readToEndAlloc(allocator, 4096);
+    defer allocator.free(content);
+
+    const line = std.mem.trimRight(u8, content, "\n");
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
+    defer parsed.deinit();
+
+    try std.testing.expect(parsed.value == .object);
+    try std.testing.expectEqualStrings("error", parsed.value.object.get("event").?.string);
+    try std.testing.expectEqualStrings("provider\"alpha", parsed.value.object.get("component").?.string);
+    try std.testing.expectEqualStrings("line1\nline2\\tail", parsed.value.object.get("message").?.string);
 }
 
 // ── Additional observability tests ──────────────────────────────
